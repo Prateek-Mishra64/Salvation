@@ -1,0 +1,7 @@
+[workspaces]
+members = [
+    "Crates/salvation-server",
+    "Crates/salvation-client",
+    "Crates/salvation-common"
+]
+resolver = "3"
