@@ -1,7 +1,7 @@
-[workspaces]
+[workspace]
 members = [
-    "Crates/salvation-server",
-    "Crates/salvation-client",
-    "Crates/salvation-common"
+    "crates/salvation-server",
+    "crates/salvation-client",
+    "crates/salvation-common"
 ]
 resolver = "3"
