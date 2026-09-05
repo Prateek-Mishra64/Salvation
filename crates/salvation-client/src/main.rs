@@ -1,19 +1,14 @@
 mod mapper;
 mod marker;
 mod placer;
+mod sync;
 mod watcher;
 
 use std::{
-    fs, io,
-    path::PathBuf,
-    process::{Command, Stdio},
-    sync::mpsc::channel,
-    thread,
-    time::{Duration, Instant},
+    env, fs, io, path::PathBuf, process::Command, sync::mpsc::channel, thread, time::Duration,
 };
 
-const COLLECTION_WINDOW: Duration = Duration::from_secs(10);
-const STABILIZATION_BUFFER: Duration = Duration::from_secs(10);
+const SYNC_INTERVAL: Duration = Duration::from_secs(10);
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -23,9 +18,7 @@ fn main() {
         return;
     }
 
-    let has_sync_dir = args.iter().any(|arg| arg == "--sync-dir");
-
-    if !has_sync_dir {
+    if !args.iter().any(|arg| arg == "--sync-dir") {
         eprintln!("No command specified.");
         std::process::exit(1);
     }
@@ -55,11 +48,10 @@ fn main() {
         eprintln!("Failed to restart worker: {error}");
         std::process::exit(1);
     }
-}
 
-/* -------------------------------------------------------------------------- */
-/* Worker                                                                     */
-/* -------------------------------------------------------------------------- */
+    println!("Salvation worker started.");
+    println!("Synchronization interval: 10 minutes.");
+}
 
 fn run_worker() {
     if worker_is_running() {
@@ -92,87 +84,56 @@ fn worker_loop() -> io::Result<()> {
         ));
     }
 
-    let (tx, rx) = channel();
-
-    let directories = mapper::load_directories()?;
-
+    // Keep the watcher alive. Reconciliation below is the authoritative
+    // mechanism for discovering new files and changed structure.
+    let (tx, _rx) = channel();
     thread::spawn(move || {
         if let Err(error) = watcher::watch(&directories, tx) {
             eprintln!("Watcher failed: {error}");
         }
     });
 
-    let mut marker = marker::Marker::new();
-
     loop {
-        /*
-         * --------------------------------------------------------------
-         * COLLECTION WINDOW
-         * --------------------------------------------------------------
-         */
+        println!("Reconciling filesystem state...");
 
-        let deadline = Instant::now() + COLLECTION_WINDOW;
+        let mappings = mapper::reconcile()?;
+        println!("Managed files: {}", mappings.len());
 
-        while Instant::now() < deadline {
-            while let Ok(path) = rx.try_recv() {
-                marker.handle_event(path);
-            }
+        let server = env::var("SALVATION_SERVER")
+            .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "SALVATION_SERVER is not set"))?;
 
-            thread::sleep(Duration::from_millis(50));
+        let password = env::var("Salvation_Password").map_err(|_| {
+            io::Error::new(io::ErrorKind::NotFound, "Salvation_Password is not set")
+        })?;
+
+        let runtime = tokio::runtime::Runtime::new().map_err(io::Error::other)?;
+
+        if let Err(error) = runtime.block_on(sync::synchronize(&server, &password)) {
+            eprintln!("Synchronization failed: {error}");
         }
 
-        /*
-         * --------------------------------------------------------------
-         * STABILIZATION BUFFER
-         * --------------------------------------------------------------
-         *
-         * Events are deliberately ignored.
-         */
-
-        thread::sleep(STABILIZATION_BUFFER);
-
-        while rx.try_recv().is_ok() {}
-
-        /*
-         * --------------------------------------------------------------
-         * DRY-RUN SYNC BOUNDARY
-         * --------------------------------------------------------------
-         *
-         * Server/manifest integration comes later.
-         */
-
-        if marker.flag {
-            // Real sync transaction goes here.
-        }
-
-        /*
-         * Anything generated during the transaction/boundary
-         * is discarded.
-         */
-
-        while rx.try_recv().is_ok() {}
-
-        marker.clear();
+        println!("Next synchronization in 10 minutes.");
+        thread::sleep(sync_interval());
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Worker lifecycle                                                           */
-/* -------------------------------------------------------------------------- */
+fn sync_interval() -> Duration {
+    match env::var("SALVATION_SYNC_INTERVAL") {
+        Ok(value) => match value.parse::<u64>() {
+            Ok(seconds) if seconds > 0 => Duration::from_secs(seconds),
+            _ => SYNC_INTERVAL,
+        },
+        Err(_) => SYNC_INTERVAL,
+    }
+}
 
 fn restart_worker() -> io::Result<()> {
     stop_worker()?;
-
     thread::sleep(Duration::from_millis(100));
 
     let executable = std::env::current_exe()?;
 
-    Command::new(executable)
-        .arg("--worker")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+    Command::new(executable).arg("--worker").spawn()?;
 
     Ok(())
 }
@@ -223,7 +184,6 @@ fn worker_is_running() -> bool {
 
     match Command::new("kill").arg("-0").arg(pid.to_string()).status() {
         Ok(status) if status.success() => true,
-
         _ => {
             let _ = fs::remove_file(path);
             false
@@ -231,12 +191,7 @@ fn worker_is_running() -> bool {
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Paths                                                                      */
-/* -------------------------------------------------------------------------- */
-
 fn pid_file() -> PathBuf {
     let home = std::env::var_os("HOME").expect("HOME is not set");
-
     PathBuf::from(home).join(".salvation.pid")
 }

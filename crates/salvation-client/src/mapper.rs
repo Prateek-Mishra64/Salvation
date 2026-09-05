@@ -201,6 +201,77 @@ pub fn save_mapping(config: &MapperConfig, mappings: &[FileMapping]) -> io::Resu
     Ok(())
 }
 
+pub fn load_config() -> io::Result<MapperConfig> {
+    let contents = fs::read_to_string(salvation_path())?;
+
+    let mut directories = Vec::new();
+    let mut current: Option<DirectoryConfig> = None;
+    let mut reading_rules = false;
+
+    for line in contents.lines() {
+        match line {
+            "[DIRECTORY]" => {
+                if let Some(directory) = current.take() {
+                    directories.push(directory);
+                }
+
+                current = Some(DirectoryConfig {
+                    path: PathBuf::new(),
+                    files: Vec::new(),
+                    all: false,
+                });
+
+                reading_rules = false;
+            }
+
+            "[FILE RULES]" => {
+                reading_rules = true;
+            }
+
+            "[FILES]" => {
+                reading_rules = false;
+            }
+
+            _ if line.starts_with("PATH: ") => {
+                if let Some(directory) = current.as_mut() {
+                    if directory.path.as_os_str().is_empty() {
+                        directory.path = PathBuf::from(line.strip_prefix("PATH: ").unwrap());
+                    }
+                }
+            }
+
+            _ if reading_rules => {
+                if let Some(directory) = current.as_mut() {
+                    let rule = line.trim();
+
+                    if rule == "all" {
+                        directory.all = true;
+                    } else if !rule.is_empty() {
+                        directory.files.push(rule.to_string());
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    if let Some(directory) = current {
+        directories.push(directory);
+    }
+
+    Ok(MapperConfig { directories })
+}
+
+pub fn reconcile() -> io::Result<Vec<FileMapping>> {
+    let config = load_config()?;
+    let mappings = build_mapping(&config)?;
+
+    save_mapping(&config, &mappings)?;
+
+    Ok(mappings)
+}
+
 pub fn load_directories() -> io::Result<Vec<PathBuf>> {
     let contents = fs::read_to_string(salvation_path())?;
 
@@ -319,4 +390,68 @@ fn expand_home(path: &str) -> PathBuf {
     }
 
     PathBuf::from(path)
+}
+
+pub fn load_mappings() -> io::Result<Vec<FileMapping>> {
+    let contents = fs::read_to_string(salvation_path())?;
+
+    let mut mappings = Vec::new();
+    let mut in_files = false;
+    let mut current_path: Option<PathBuf> = None;
+    let mut parents = Vec::new();
+    let mut reading_parents = false;
+
+    for line in contents.lines() {
+        match line {
+            "[FILES]" => {
+                in_files = true;
+                reading_parents = false;
+            }
+
+            "[DIRECTORY]" => {
+                in_files = false;
+                reading_parents = false;
+            }
+
+            _ if !in_files => {}
+
+            _ if line.starts_with("PATH: ") => {
+                if let Some(path) = current_path.take() {
+                    mappings.push(FileMapping {
+                        full_path: path,
+                        parent_vector: parents.clone(),
+                    });
+                }
+
+                current_path = Some(PathBuf::from(line.strip_prefix("PATH: ").unwrap()));
+                parents.clear();
+                reading_parents = false;
+            }
+
+            "PARENTS:" if in_files => {
+                reading_parents = true;
+            }
+
+            _ if reading_parents => {
+                if let Some(parent) = line.strip_prefix("  ") {
+                    if !parent.is_empty() {
+                        parents.push(parent.to_string());
+                    }
+                } else if !line.trim().is_empty() {
+                    reading_parents = false;
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    if let Some(path) = current_path {
+        mappings.push(FileMapping {
+            full_path: path,
+            parent_vector: parents,
+        });
+    }
+
+    Ok(mappings)
 }
