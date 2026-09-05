@@ -1,4 +1,4 @@
-version = 11
+version = 38
 
 [[files]]
 path = "Projects/Salvation/salvationTest/5608352.jpg"
@@ -65,25 +65,41 @@ last_modified = 1788619981
 lifecycle_at = 0
 
 [[files]]
-path = "home/prateek/tmp/17029c82.jpg"
-location = "tmp"
-size = 132269
-hash = "17029c82b01f82c32858bc106338a7ffc531d27d72346911359a73768565a691"
-last_modified = 1788621667
-lifecycle_at = 1788621667
+path = "Projects/Salvation/salvationTest/475526.jpg"
+location = "files"
+size = 93578
+hash = "b73ab516a116ca501f2122ca70b84faa36c42f31a1530c77c0be46e3778ad925"
+last_modified = 1788625036
+lifecycle_at = 0
 
 [[files]]
-path = "home/prateek/tmp/WhatsApp Audio 2026-08-07 at 14.12.09.aac"
-location = "tmp"
-size = 2401506
-hash = "fce0a031fea192c8df9ca9c4dfe626a55319322557c0d316cb4dbdaa6be8b56b"
-last_modified = 1788621667
-lifecycle_at = 1788621667
+path = "prateek/tmp/SaveGames/ValSaveGame@steam3228590#76561198687763152-0+597268791190000.sav"
+location = "files"
+size = 234306
+hash = "3fc0dd4421dbf56d2dc90ed2bc32416e7df04a3a589d8b2ec96407f70676521c"
+last_modified = 1788625336
+lifecycle_at = 0
 
 [[files]]
-path = "home/prateek/tmp/6401533.jpg"
-location = "tmp"
-size = 123479
-hash = "73b3a7ce272623908d2214d1d025ee4e7753cb9fa8c5f6c3023669f98ac20c29"
-last_modified = 1788621667
-lifecycle_at = 1788621667
+path = "prateek/tmp/SaveGames/ValSaveGame@steam3228590#76561198687763152-0+597268215690000.sav"
+location = "files"
+size = 234306
+hash = "899f994a488a699c17078f144107c39503632da5fdffa8dfda580876fa0f85c9"
+last_modified = 1788625336
+lifecycle_at = 0
+
+[[files]]
+path = "prateek/tmp/SaveGames/steam_autocloud.vdf"
+location = "files"
+size = 52
+hash = "635573980dec337aab298ff232994ef02ba447611e28b5dd18161eb16e6c97e0"
+last_modified = 1788625336
+lifecycle_at = 0
+
+[[files]]
+path = "prateek/tmp/SaveGames/ValSaveGame@steam3228590#76561198687763152-0+597268275070000.sav"
+location = "files"
+size = 234306
+hash = "9415620d2b0b7e367616b7bc360f80181e2e7117a781ba600021b81eef728438"
+last_modified = 1788625336
+lifecycle_at = 0

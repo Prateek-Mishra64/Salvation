@@ -13,6 +13,7 @@ use crate::mapper::{self, FileMapping};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Manifest {
     version: u64,
+
     #[serde(default)]
     files: Vec<FileEntry>,
 }
@@ -20,16 +21,27 @@ struct Manifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FileEntry {
     path: String,
+
     #[serde(default)]
     location: String,
+
     #[serde(default)]
     size: u64,
+
     #[serde(default)]
     hash: String,
+
     #[serde(default)]
     last_modified: u64,
+
     #[serde(default)]
     lifecycle_at: u64,
+}
+
+impl Manifest {
+    fn find_file(&self, path: &str) -> Option<&FileEntry> {
+        self.files.iter().find(|file| file.path == path)
+    }
 }
 
 pub async fn synchronize(server: &str, password: &str) -> io::Result<()> {
@@ -41,7 +53,10 @@ pub async fn synchronize(server: &str, password: &str) -> io::Result<()> {
     }
 
     let client = Client::new();
+
     let server_manifest = get_server_manifest(&client, server, password).await?;
+
+    let previous_manifest = load_previous_server_manifest();
 
     println!(
         "Synchronizing {} managed file(s) against server manifest v{}...",
@@ -53,17 +68,51 @@ pub async fn synchronize(server: &str, password: &str) -> io::Result<()> {
     let mut downloads: Vec<(&FileMapping, String)> = Vec::new();
 
     for mapping in &mappings {
+        let logical = logical_path(mapping)?;
+
+        /*
+         * Local file is missing.
+         *
+         * If the server has it, restore it.
+         * If the server does not have it, there is nothing to do.
+         */
         if !mapping.full_path.is_file() {
+            if server_manifest.find_file(&logical).is_some() {
+                println!("{logical}: local file missing -> DOWNLOAD");
+
+                downloads.push((mapping, logical));
+            }
+
             continue;
         }
 
-        let logical = logical_path(mapping)?;
         let local = local_metadata(&mapping.full_path)?;
 
-        match server_manifest.files.iter().find(|f| f.path == logical) {
+        match server_manifest.find_file(&logical) {
+            /*
+             * Server does not currently have this file.
+             *
+             * If it was previously known, the server deliberately
+             * removed it (for example through annihilation), so
+             * remove the local copy.
+             *
+             * Otherwise this is a genuinely new local file, so upload it.
+             */
             None => {
-                println!("{logical}: not on server -> UPLOAD");
-                uploads.push(mapping);
+                let was_previously_known = previous_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.find_file(&logical))
+                    .is_some();
+
+                if was_previously_known {
+                    println!("{logical}: removed from server -> DELETE LOCAL");
+
+                    fs::remove_file(&mapping.full_path)?;
+                } else {
+                    println!("{logical}: new local file -> UPLOAD");
+
+                    uploads.push(mapping);
+                }
             }
 
             Some(remote) if remote.hash == local.hash => {
@@ -72,11 +121,13 @@ pub async fn synchronize(server: &str, password: &str) -> io::Result<()> {
 
             Some(remote) if local.last_modified >= remote.last_modified => {
                 println!("{logical}: local differs and is newer -> UPLOAD");
+
                 uploads.push(mapping);
             }
 
             Some(_) => {
                 println!("{logical}: server differs and is newer -> DOWNLOAD");
+
                 downloads.push((mapping, logical));
             }
         }
@@ -87,8 +138,23 @@ pub async fn synchronize(server: &str, password: &str) -> io::Result<()> {
     }
 
     for (mapping, logical) in &downloads {
-        download_file(&client, server, password, &logical, &mapping.full_path).await?;
+        download_file(&client, server, password, logical, &mapping.full_path).await?;
     }
+
+    /*
+     * Store the latest authoritative server manifest locally.
+     *
+     * This is used on the next synchronization to distinguish:
+     *
+     *   genuinely new local file -> UPLOAD
+     *
+     * from:
+     *
+     *   previously known file removed by server -> DELETE LOCAL
+     */
+    let current_manifest = toml::to_string(&server_manifest).map_err(io::Error::other)?;
+
+    save_local_server_manifest(&current_manifest)?;
 
     if uploads.is_empty() && downloads.is_empty() {
         println!("Synchronization complete: nothing to transfer.");
@@ -119,6 +185,7 @@ async fn get_server_manifest(
     }
 
     let text = response.text().await.map_err(io::Error::other)?;
+
     toml::from_str(&text).map_err(io::Error::other)
 }
 
@@ -132,6 +199,7 @@ async fn upload_files(
 
     for mapping in mappings {
         let data = fs::read(&mapping.full_path)?;
+
         let logical = logical_path(mapping)?;
 
         println!("Uploading {} as {}", mapping.full_path.display(), logical);
@@ -152,6 +220,7 @@ async fn upload_files(
         }
 
         let _ = response.text().await.map_err(io::Error::other)?;
+
         staged = true;
     }
 
@@ -176,9 +245,11 @@ async fn upload_files(
     }
 
     let committed = response.text().await.map_err(io::Error::other)?;
+
     save_local_server_manifest(&committed)?;
 
     println!("Upload transaction committed.");
+
     Ok(())
 }
 
@@ -210,6 +281,7 @@ async fn download_file(
     }
 
     fs::write(destination, &data)?;
+
     println!("Downloaded {logical_path} -> {}", destination.display());
 
     Ok(())
@@ -222,6 +294,7 @@ fn logical_path(mapping: &FileMapping) -> io::Result<String> {
         .ok_or_else(|| io::Error::other("managed file has no filename"))?;
 
     let mut parts = mapping.parent_vector.clone();
+
     parts.push(filename.to_string_lossy().into_owned());
 
     Ok(parts.join("/"))
@@ -234,7 +307,9 @@ struct LocalMetadata {
 
 fn local_metadata(path: &Path) -> io::Result<LocalMetadata> {
     let data = fs::read(path)?;
+
     let metadata = fs::metadata(path)?;
+
     let hash = Sha256::digest(&data)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -252,8 +327,19 @@ fn local_metadata(path: &Path) -> io::Result<LocalMetadata> {
     })
 }
 
+fn load_previous_server_manifest() -> Option<Manifest> {
+    let home = std::env::var_os("HOME")?;
+
+    let path = PathBuf::from(home).join(".salvation-server-manifest");
+
+    let contents = fs::read_to_string(path).ok()?;
+
+    toml::from_str(&contents).ok()
+}
+
 fn save_local_server_manifest(contents: &str) -> io::Result<()> {
     let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is not set"))?;
+
     fs::write(
         PathBuf::from(home).join(".salvation-server-manifest"),
         contents,
@@ -262,13 +348,16 @@ fn save_local_server_manifest(contents: &str) -> io::Result<()> {
 
 fn server_url(server: &str, segments: &[&str]) -> io::Result<Url> {
     let mut url = Url::parse(server.trim_end_matches('/')).map_err(io::Error::other)?;
+
     {
         let mut path = url
             .path_segments_mut()
             .map_err(|_| io::Error::other("invalid server URL"))?;
+
         for segment in segments {
             path.push(segment);
         }
     }
+
     Ok(url)
 }

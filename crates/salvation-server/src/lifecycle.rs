@@ -6,8 +6,8 @@ use std::{
 
 use crate::manifest::{Location, Manifest};
 
-pub const TMP_RETENTION: u64 = 60;
-pub const RECALL_RETENTION: u64 = 60;
+pub const TMP_RETENTION: u64 = 24 * 60 * 60;
+pub const RECALL_RETENTION: u64 = 24 * 60 * 60;
 
 pub fn now() -> u64 {
     SystemTime::now()
@@ -60,6 +60,7 @@ fn move_file(
     }
 
     fs::rename(&source, &destination)?;
+
     Ok(destination)
 }
 
@@ -68,7 +69,10 @@ fn safe_path(root: &Path, relative_path: &str) -> io::Result<PathBuf> {
 
     for component in Path::new(relative_path).components() {
         match component {
-            std::path::Component::Normal(part) => path.push(part),
+            std::path::Component::Normal(part) => {
+                path.push(part);
+            }
+
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -86,8 +90,9 @@ pub fn process_manifest(
     tmp_root: &Path,
     recall_root: &Path,
     current_time: u64,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let mut remove = Vec::new();
+    let mut changed = false;
 
     for (index, file) in manifest.files.iter_mut().enumerate() {
         let age = current_time.saturating_sub(file.lifecycle_at);
@@ -98,11 +103,15 @@ pub fn process_manifest(
 
                 file.location = Location::Recall;
                 file.lifecycle_at = current_time;
+
+                changed = true;
             }
 
             Location::Recall if age >= RECALL_RETENTION => {
                 annihilate(recall_root, &file.path)?;
+
                 remove.push(index);
+                changed = true;
             }
 
             _ => {}
@@ -113,7 +122,7 @@ pub fn process_manifest(
         manifest.files.remove(index);
     }
 
-    Ok(())
+    Ok(changed)
 }
 
 pub fn process_manifest_file(
@@ -122,8 +131,15 @@ pub fn process_manifest_file(
     recall_root: &Path,
 ) -> io::Result<()> {
     let mut manifest = crate::manifest::load(manifest_path)?;
-    process_manifest(&mut manifest, tmp_root, recall_root, now())?;
-    crate::manifest::save(manifest_path, &manifest)?;
+
+    let changed = process_manifest(&mut manifest, tmp_root, recall_root, now())?;
+
+    if changed {
+        manifest.version = manifest.version.saturating_add(1);
+
+        crate::manifest::save(manifest_path, &manifest)?;
+    }
+
     Ok(())
 }
 

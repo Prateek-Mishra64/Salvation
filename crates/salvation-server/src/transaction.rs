@@ -25,6 +25,8 @@ impl Transaction {
         fs::create_dir_all(&phantom_root)?;
 
         let mut manifest = current_manifest.clone();
+
+        // The transaction represents one pending manifest mutation.
         manifest.version = manifest.version.saturating_add(1);
 
         crate::manifest::save(&phantom_manifest, &manifest)?;
@@ -73,7 +75,7 @@ impl Transaction {
 
         let lifecycle_at = match location {
             Location::Tmp => crate::lifecycle::now(),
-            _ => 0,
+            Location::Files | Location::Recall => 0,
         };
 
         let entry = FileEntry {

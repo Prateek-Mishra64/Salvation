@@ -54,6 +54,7 @@ impl Manifest {
 
         file.location = location;
         file.lifecycle_at = lifecycle_at;
+
         true
     }
 
